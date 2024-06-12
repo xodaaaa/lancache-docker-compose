@@ -1,0 +1,99 @@
+version: '2'
+services:
+  dns:
+    image: lancachenet/lancache-dns:latest
+    env_file: .env
+    restart: always
+    ports:
+      - "${DNS_BIND_IP}:53:53/udp"
+      - "${DNS_BIND_IP}:53:53/tcp"
+    labels:
+      lancache.dns: "true"
+    healthcheck:
+      test: ["CMD", "dig", "+norecurse", "+short" ,"+retry=0", "@127.0.0.1", "lancache.net"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      default:
+      dns-metrics:
+        aliases:
+          - lancache-dns      
+
+## HTTPS requests are now handled in monolithic directly
+## you could choose to return to sniproxy if desired
+#
+#  sniproxy:
+#    image: lancachenet/sniproxy:latest
+#    env_file: .env
+#    restart: always
+#    ports:
+#      - 443:443/tcp
+
+  monolithic:
+    image: lancachenet/monolithic:latest
+    env_file: .env
+    restart: always
+    ports:
+      - "80:80/tcp"
+      - "443:443/tcp"
+    volumes:
+      - "${CACHE_ROOT}/cache:/data/cache"
+      - "${CACHE_ROOT}/logs:/data/logs"
+    labels:
+      lancache.monolithic: "true"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/nginx_status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      default:
+      monolithic-metrics:
+        aliases:
+          - lancache-monolithic
+
+## Metrics exporter for DNS and Monolithic
+## This can be disabled, if you don't want to export metrics to prometheus
+## To disable, comment out the next two services
+
+  dns-metrics:
+    image: prometheuscommunity/bind-exporter:master
+    restart: always
+    command:
+      - --web.listen-address=:9119 # This is the port the exporter will listen on
+      - --bind.stats-url=http://lancache-dns:8053
+    ports:
+      - "9119:9119"
+    labels:
+      lancache.dns.metrics: "true"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:9119/metrics"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      dns-metrics:
+        aliases:
+          - bind-exporter
+  
+  monolithic-metrics:
+    image: nginx/nginx-prometheus-exporter:latest
+    restart: always
+    command:
+      - --nginx.scrape-uri=http://lancache-monolithic:8080/nginx_status
+    ports:
+      - "9113:9113"
+    labels:
+      lancache.monolithic.metrics: "true"
+    networks:
+      monolithic-metrics:
+        aliases:
+          - monolithic-exporter
+
+## Network definitions, do not change these, unless you know what you are doing
+
+networks:
+  default:
+  dns-metrics:
+  monolithic-metrics:
